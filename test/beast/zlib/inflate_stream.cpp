@@ -460,7 +460,6 @@ public:
             error::end_of_stream);
         check({0x02, 0x08, 0x20, 0x80, 0x00, 0x03, 0x00},
             error::end_of_stream);
-        // TODO: Excess data (from golang test inflate suite), should this be an error?
         check({0x78, 0x9c, 0x03, 0x00, 0x00, 0x00, 0x00, 0x01, 0x78, 0x9c, 0xff},
             error::invalid_stored_length);
     }
