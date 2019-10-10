@@ -56,6 +56,7 @@ class deflate_stream_test : public beast::unit_test::suite
             int memLevel,
             int strategy) override
         {
+          zs = {};
             const auto res = deflateInit2(&zs, level, Z_DEFAULT_STRATEGY, windowBits, memLevel, strategy);
             if(res != Z_OK)
               throw std::invalid_argument{"zlib compressor: bad arg"};
@@ -92,7 +93,7 @@ class deflate_stream_test : public beast::unit_test::suite
         ~ZlibCompressor() override {
             deflateEnd(&zs);
         }
-    };
+    } zlib_compressor;
     class BeastCompressor : public ICompressor {
         z_params zp;
         deflate_stream ds;
@@ -106,6 +107,8 @@ class deflate_stream_test : public beast::unit_test::suite
             int memLevel,
             int strategy) override
         {
+            zp = {};
+            ds.clear();
             ds.reset(
                 level,
                 windowBits,
@@ -132,7 +135,7 @@ class deflate_stream_test : public beast::unit_test::suite
         }
 
         ~BeastCompressor() override = default;
-    };
+    } beast_compressor;
 
 public:
     // Lots of repeats, limited char range
@@ -421,7 +424,7 @@ public:
         doMatrix(corpus1(1024), &self::doDeflate1_beast);
     }
 
-    void testInvalidSettings()
+    void testInvalidSettings(ICompressor& compressor)
     {
         except<std::invalid_argument>(
             []()
@@ -455,7 +458,7 @@ public:
     }
 
     void
-    testWriteAfterFinish()
+    testWriteAfterFinish(ICompressor& compressor)
     {
         z_params zp;
         deflate_stream ds;
@@ -485,7 +488,7 @@ public:
     }
 
     void
-    testFlushPartial(std::unique_ptr<ICompressor> compressor)
+    testFlushPartial(ICompressor& compressor)
     {
         z_params zp;
         deflate_stream ds;
@@ -505,7 +508,7 @@ public:
     }
 
     void
-    testFlushAtLiteralBufferFull()
+    testFlushAtLiteralBufferFull(ICompressor& compressor)
     {
         struct fixture
         {
@@ -555,7 +558,7 @@ public:
     }
 
     void
-    testRLEMatchLengthExceedLookahead()
+    testRLEMatchLengthExceedLookahead(ICompressor& compressor)
     {
         z_params zp;
         deflate_stream ds;
@@ -578,7 +581,7 @@ public:
     }
 
     void
-    testFlushAfterDistMatch()
+    testFlushAfterDistMatch(ICompressor& compressor)
     {
         for (auto out_size : {144, 129})
         {
@@ -613,12 +616,18 @@ public:
             sizeof(deflate_stream) << std::endl;
 
         testDeflate();
-        testInvalidSettings();
-        testWriteAfterFinish();
-        testFlushPartial();
-        testFlushAtLiteralBufferFull();
-        testRLEMatchLengthExceedLookahead();
-        testFlushAfterDistMatch();
+        testInvalidSettings(zlib_compressor);
+        testInvalidSettings(beast_compressor);
+        testWriteAfterFinish(zlib_compressor);
+        testWriteAfterFinish(beast_compressor);
+        testFlushPartial(zlib_compressor);
+        testFlushPartial(beast_compressor);
+        testFlushAtLiteralBufferFull(zlib_compressor);
+        testFlushAtLiteralBufferFull(beast_compressor);
+        testRLEMatchLengthExceedLookahead(zlib_compressor);
+        testRLEMatchLengthExceedLookahead(beast_compressor);
+        testFlushAfterDistMatch(zlib_compressor);
+        testFlushAfterDistMatch(beast_compressor);
     }
 };
 
