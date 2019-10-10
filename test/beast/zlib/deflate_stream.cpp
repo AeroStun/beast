@@ -25,6 +25,115 @@ namespace zlib {
 
 class deflate_stream_test : public beast::unit_test::suite
 {
+    struct ICompressor {
+        virtual void init(
+            int level,
+            int windowBits,
+            int memLevel,
+            int strategy) = 0;
+
+        virtual std::size_t avail_in() const noexcept = 0;
+        virtual void avail_in(std::size_t) noexcept = 0;
+        virtual void const* next_in() const noexcept = 0;
+        virtual void next_in(void*) noexcept = 0;
+        virtual std::size_t avail_out() const noexcept = 0;
+        virtual void avail_out(std::size_t) noexcept = 0;
+        virtual void* next_out() const noexcept = 0;
+        virtual void next_out(void*) noexcept = 0;
+
+        virtual std::size_t bound(std::size_t) = 0;
+        virtual error_code write(Flush) = 0;
+        virtual ~ICompressor() = default;
+    };
+    class ZlibCompressor : public ICompressor {
+        z_stream zs;
+
+    public:
+        ZlibCompressor() = default;
+        void init(
+            int level,
+            int windowBits,
+            int memLevel,
+            int strategy) override
+        {
+            const auto res = deflateInit2(&zs, level, Z_DEFAULT_STRATEGY, windowBits, memLevel, strategy);
+            if(res != Z_OK)
+              throw std::invalid_argument{"zlib compressor: bad arg"};
+        }
+
+        virtual std::size_t avail_in() const noexcept override  { return zs.avail_in; }
+        virtual void avail_in(std::size_t n) noexcept override { zs.avail_in = n; }
+        virtual void const* next_in() const noexcept override { return zs.next_in; }
+        virtual void next_in(void* ptr) noexcept override { zs.next_in = static_cast<Bytef*>(ptr); }
+        virtual std::size_t avail_out() const noexcept override { return zs.avail_out; }
+        virtual void avail_out(std::size_t n_out) noexcept override { zs.avail_out = n_out; }
+        virtual void* next_out() const noexcept override { return zs.next_out; }
+        virtual void next_out(void* ptr) noexcept override { zs.next_out = (Bytef*)ptr; }
+
+        std::size_t bound(std::size_t src_size) override {
+          return deflateBound(&zs, static_cast<uLong>(src_size));
+        }
+        error_code write(Flush flush) override {
+            const auto res = deflate(&zs, static_cast<int>(flush));
+            switch(res){
+            case Z_OK:
+                return {};
+            case Z_STREAM_END:
+                return {error::end_of_stream};
+            case Z_STREAM_ERROR:
+                return {error::stream_error};
+            case Z_BUF_ERROR:
+                return {error::need_buffers};
+            default:
+                throw;
+            }
+        }
+
+        ~ZlibCompressor() override {
+            deflateEnd(&zs);
+        }
+    };
+    class BeastCompressor : public ICompressor {
+        z_params zp;
+        deflate_stream ds;
+
+    public:
+        BeastCompressor() = default;
+
+        void init(
+            int level,
+            int windowBits,
+            int memLevel,
+            int strategy) override
+        {
+            ds.reset(
+                level,
+                windowBits,
+                memLevel,
+                toStrategy(strategy));
+        }
+
+        virtual std::size_t avail_in() const noexcept override  { return zp.avail_in; }
+        virtual void avail_in(std::size_t n) noexcept override { zp.avail_in = n; }
+        virtual void const* next_in() const noexcept override { return zp.next_in; }
+        virtual void next_in(void* ptr) noexcept override { zp.next_in = static_cast<Bytef*>(ptr); }
+        virtual std::size_t avail_out() const noexcept override { return zp.avail_out; }
+        virtual void avail_out(std::size_t n_out) noexcept override { zp.avail_out = n_out; }
+        virtual void* next_out() const noexcept override { return zp.next_out; }
+        virtual void next_out(void* ptr) noexcept override { zp.next_out = (Bytef*)ptr; }
+
+        std::size_t bound(std::size_t src_size) override {
+            return ds.upper_bound(src_size);
+        }
+        error_code write(Flush flush) override {
+          error_code ec{};
+          ds.write(zp, flush, ec);
+          return ec;
+        }
+
+        ~BeastCompressor() override = default;
+    };
+
 public:
     // Lots of repeats, limited char range
     static
@@ -376,7 +485,7 @@ public:
     }
 
     void
-    testFlushPartial()
+    testFlushPartial(std::unique_ptr<ICompressor> compressor)
     {
         z_params zp;
         deflate_stream ds;
