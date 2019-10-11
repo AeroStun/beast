@@ -48,14 +48,26 @@ class inflate_stream_test : public beast::unit_test::suite
         {
             zs = {};
             const auto res = inflateInit2(&zs, windowBits);
-            if(res != Z_OK)
-              throw std::invalid_argument{"zlib compressor: bad arg"};
+            switch(res){
+            case Z_OK:
+               break;
+            case Z_MEM_ERROR:
+               throw std::runtime_error{"zlib decompressor: no memory"};
+            case Z_STREAM_ERROR:
+                throw std::invalid_argument{"zlib decompressor: bad arg"};
+            }
         }
         void init() override {
           zs = {};
           const auto res = inflateInit(&zs);
-          if(res != Z_OK)
-            throw std::invalid_argument{"zlib compressor: bad arg"};
+          switch(res){
+          case Z_OK:
+              break;
+          case Z_MEM_ERROR:
+              throw std::runtime_error{"zlib decompressor: no memory"};
+          case Z_STREAM_ERROR:
+              throw std::invalid_argument{"zlib decompressor: bad arg"};
+          }
         }
 
         virtual std::size_t avail_in() const noexcept override  { return zs.avail_in; }
