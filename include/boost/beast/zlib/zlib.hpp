@@ -113,13 +113,12 @@ struct z_params
 enum class Flush
 {
     // order matters
-
     none,
-    block,
     partial,
     sync,
     full,
     finish,
+    block,
     trees
 };
 
