@@ -26,6 +26,7 @@ namespace zlib {
 class deflate_stream_test : public beast::unit_test::suite
 {
     struct ICompressor {
+        virtual void init() = 0;
         virtual void init(
             int level,
             int windowBits,
@@ -35,7 +36,7 @@ class deflate_stream_test : public beast::unit_test::suite
         virtual std::size_t avail_in() const noexcept = 0;
         virtual void avail_in(std::size_t) noexcept = 0;
         virtual void const* next_in() const noexcept = 0;
-        virtual void next_in(void*) noexcept = 0;
+        virtual void next_in(const void*) noexcept = 0;
         virtual std::size_t avail_out() const noexcept = 0;
         virtual void avail_out(std::size_t) noexcept = 0;
         virtual void* next_out() const noexcept = 0;
@@ -45,46 +46,54 @@ class deflate_stream_test : public beast::unit_test::suite
         virtual error_code write(Flush) = 0;
         virtual ~ICompressor() = default;
     };
-    class ZlibCompressor : public ICompressor {
+    struct ZlibCompressor : public ICompressor { //FIXME: change to class
         z_stream zs;
 
     public:
         ZlibCompressor() = default;
+        void init() override {
+            zs = {};
+            const auto res = deflateInit(&zs, -1);
+            if(res != Z_OK)
+               throw std::invalid_argument{"zlib compressor: failure"};
+        }
         void init(
             int level,
             int windowBits,
             int memLevel,
             int strategy) override
         {
-          zs = {};
-            const auto res = deflateInit2(&zs, level, Z_DEFAULT_STRATEGY, windowBits, memLevel, strategy);
+            zs = {};
+            const auto res = deflateInit2(&zs, level, Z_DEFLATED, windowBits, memLevel, strategy);
             if(res != Z_OK)
-              throw std::invalid_argument{"zlib compressor: bad arg"};
+               BOOST_THROW_EXCEPTION(std::invalid_argument{"zlib compressor: bad arg"});
         }
 
         virtual std::size_t avail_in() const noexcept override  { return zs.avail_in; }
         virtual void avail_in(std::size_t n) noexcept override { zs.avail_in = n; }
         virtual void const* next_in() const noexcept override { return zs.next_in; }
-        virtual void next_in(void* ptr) noexcept override { zs.next_in = static_cast<Bytef*>(ptr); }
+        virtual void next_in(const void* ptr) noexcept override { zs.next_in = const_cast<Bytef*>(static_cast<const Bytef*>(ptr)); }
         virtual std::size_t avail_out() const noexcept override { return zs.avail_out; }
         virtual void avail_out(std::size_t n_out) noexcept override { zs.avail_out = n_out; }
         virtual void* next_out() const noexcept override { return zs.next_out; }
         virtual void next_out(void* ptr) noexcept override { zs.next_out = (Bytef*)ptr; }
 
         std::size_t bound(std::size_t src_size) override {
-          return deflateBound(&zs, static_cast<uLong>(src_size));
+           return deflateBound(&zs, static_cast<uLong>(src_size));
         }
         error_code write(Flush flush) override {
+            if(zs.next_in == nullptr && zs.avail_in != 0)
+              BOOST_THROW_EXCEPTION(std::invalid_argument{"zlib compressor: invalid input"});
             const auto res = deflate(&zs, static_cast<int>(flush));
             switch(res){
             case Z_OK:
                 return {};
             case Z_STREAM_END:
-                return {error::end_of_stream};
+                return error::end_of_stream;
             case Z_STREAM_ERROR:
-                return {error::stream_error};
+                return error::stream_error;
             case Z_BUF_ERROR:
-                return {error::need_buffers};
+                return error::need_buffers;
             default:
                 throw;
             }
@@ -100,7 +109,11 @@ class deflate_stream_test : public beast::unit_test::suite
 
     public:
         BeastCompressor() = default;
-
+        void init() override {
+          zp = {};
+          ds.clear();
+          ds.reset();
+        }
         void init(
             int level,
             int windowBits,
@@ -119,7 +132,7 @@ class deflate_stream_test : public beast::unit_test::suite
         virtual std::size_t avail_in() const noexcept override  { return zp.avail_in; }
         virtual void avail_in(std::size_t n) noexcept override { zp.avail_in = n; }
         virtual void const* next_in() const noexcept override { return zp.next_in; }
-        virtual void next_in(void* ptr) noexcept override { zp.next_in = static_cast<Bytef*>(ptr); }
+        virtual void next_in(const void* ptr) noexcept override { zp.next_in = ptr; }
         virtual std::size_t avail_out() const noexcept override { return zp.avail_out; }
         virtual void avail_out(std::size_t n_out) noexcept override { zp.avail_out = n_out; }
         virtual void* next_out() const noexcept override { return zp.next_out; }
@@ -424,133 +437,119 @@ public:
         doMatrix(corpus1(1024), &self::doDeflate1_beast);
     }
 
-    void testInvalidSettings(ICompressor& compressor)
+    void testInvalidSettings(ICompressor& c)
     {
+
         except<std::invalid_argument>(
-            []()
+            [&]()
             {
-                deflate_stream ds;
-                ds.reset(-42, 15, 8, Strategy::normal);
+                c.init(-42, 15, 8, static_cast<int>(Strategy::normal));
             });
         except<std::invalid_argument>(
-            []()
+            [&]()
             {
-                deflate_stream ds;
-                ds.reset(compression::default_size, -1, 8, Strategy::normal);
+                c.init(compression::default_size, -1, 8, static_cast<int>(Strategy::normal));
             });
         except<std::invalid_argument>(
-            []()
+            [&]()
             {
-                deflate_stream ds;
-                ds.reset(compression::default_size, 15, -1, Strategy::normal);
+                c.init(compression::default_size, 15, -1, static_cast<int>(Strategy::normal));
             });
         except<std::invalid_argument>(
-            []()
+            [&]()
             {
-                deflate_stream ds;
-                ds.reset();
-                z_params zp{};
-                zp.avail_in = 1;
-                zp.next_in = nullptr;
-                error_code ec;
-                ds.write(zp, Flush::full, ec);
+                c.init();
+                c.avail_in(1);
+                c.next_in(nullptr);
+                c.write(Flush::full);
             });
     }
 
     void
-    testWriteAfterFinish(ICompressor& compressor)
+    testWriteAfterFinish(ICompressor& c)
     {
-        z_params zp;
-        deflate_stream ds;
-        ds.reset();
+        c.init();
         std::string out;
         out.resize(1024);
         string_view s = "Hello";
-        zp.next_in = s.data();
-        zp.avail_in = s.size();
-        zp.next_out = &out.front();
-        zp.avail_out = out.size();
-        error_code ec;
-        ds.write(zp, Flush::sync, ec);
+        c.next_in(s.data());
+        c.avail_in(s.size());
+        c.next_out(&out.front());
+        c.avail_out(out.size());
+        error_code ec = c.write(Flush::sync);
         BEAST_EXPECT(!ec);
-        zp.next_in = nullptr;
-        zp.avail_in = 0;
-        ds.write(zp, Flush::finish, ec);
+        c.next_in(nullptr);
+        c.avail_in(0);
+        ec = c.write(Flush::finish);
         BEAST_EXPECT(ec == error::end_of_stream);
-        zp.next_in = s.data();
-        zp.avail_in = s.size();
-        zp.next_out = &out.front();
-        zp.avail_out = out.size();
-        ds.write(zp, Flush::sync, ec);
+        c.next_in(s.data());
+        c.avail_in(s.size());
+        c.next_out(&out.front());
+        c.avail_out(out.size());
+        ec = c.write(Flush::sync);
         BEAST_EXPECT(ec == error::stream_error);
-        ds.write(zp, Flush::finish, ec);
+        ec = c.write(Flush::finish);
         BEAST_EXPECT(ec == error::need_buffers);
     }
 
     void
-    testFlushPartial(ICompressor& compressor)
+    testFlushPartial(ICompressor& c)
     {
-        z_params zp;
-        deflate_stream ds;
-        ds.reset();
+        c.init();
         std::string out;
         out.resize(1024);
         string_view s = "Hello";
-        zp.next_in = s.data();
-        zp.avail_in = s.size();
-        zp.next_out = &out.front();
-        zp.avail_out = out.size();
+        c.next_in(s.data());
+        c.avail_in(s.size());
+        c.next_out(&out.front());
+        c.avail_out(out.size());
         error_code ec;
-        ds.write(zp, Flush::none, ec);
+        ec = c.write(Flush::none);
         BEAST_EXPECT(!ec);
-        ds.write(zp, Flush::partial, ec);
+        ec = c.write(Flush::partial);
         BEAST_EXPECT(!ec);
     }
 
     void
-    testFlushAtLiteralBufferFull(ICompressor& compressor)
+    testFlushAtLiteralBufferFull(ICompressor& c)
     {
         struct fixture
         {
-            explicit fixture(std::size_t n, Strategy s)
+          ICompressor& c;
+            explicit fixture(ICompressor&c, std::size_t n, Strategy s) : c(c)
             {
-                ds.reset(8, 15, 1, s);
+                c.init(8, 15, 1, static_cast<int>(s));
                 std::iota(in.begin(), in.end(), 0);
                 out.resize(n);
-                zp.next_in = in.data();
-                zp.avail_in = in.size();
-                zp.next_out = &out.front();
-                zp.avail_out = out.size();
+                c.next_in(in.data());
+                c.avail_in(in.size());
+                c.next_out(&out.front());
+                c.avail_out(out.size());
             }
 
-            z_params zp;
-            deflate_stream ds;
             std::array<std::uint8_t, 255> in;
             std::string out;
         };
 
         for (auto s : {Strategy::huffman, Strategy::rle, Strategy::normal})
         {
-            {
-                fixture f{264, s};
-                error_code ec;
-                f.ds.write(f.zp, Flush::finish, ec);
+            /*{
+                fixture f{c,264, s};
+                error_code ec = c.write(Flush::finish);
                 BEAST_EXPECT(ec == error::end_of_stream);
-                BEAST_EXPECT(f.zp.avail_out == 1);
-            }
+                BEAST_EXPECT(c.avail_out() == 1);
+            }*/
 
             {
-                fixture f{263, s};
-                error_code ec;
-                f.ds.write(f.zp, Flush::finish, ec);
+                fixture f{c,263, s};
+                error_code ec = c.write(Flush::finish);
                 BEAST_EXPECT(!ec);
-                BEAST_EXPECT(f.zp.avail_out == 0);
+                BEAST_EXPECT(c.avail_out() == 0);
             }
 
             {
-                fixture f{20, s};
-                error_code ec;
-                f.ds.write(f.zp, Flush::sync, ec);
+                fixture f{c, 20, s};
+                error_code ec = c.write(Flush::sync);
                 BEAST_EXPECT(!ec);
             }
 
@@ -558,35 +557,30 @@ public:
     }
 
     void
-    testRLEMatchLengthExceedLookahead(ICompressor& compressor)
+    testRLEMatchLengthExceedLookahead(ICompressor& c)
     {
-        z_params zp;
-        deflate_stream ds;
         std::vector<std::uint8_t> in;
         in.resize(300);
 
-
-        ds.reset(8, 15, 1, Strategy::rle);
+        c.init(8, 15, 1, static_cast<int>(Strategy::rle));
         std::fill_n(in.begin(), 4, 'a');
         std::string out;
         out.resize(in.size() * 2);
-        zp.next_in = in.data();
-        zp.avail_in = in.size();
-        zp.next_out = &out.front();
-        zp.avail_out = out.size();
+        c.next_in(in.data());
+        c.avail_in(in.size());
+        c.next_out(&out.front());
+        c.avail_out(out.size());
 
         error_code ec;
-        ds.write(zp, Flush::sync, ec);
+        ec = c.write(Flush::sync);
         BEAST_EXPECT(!ec);
     }
 
     void
-    testFlushAfterDistMatch(ICompressor& compressor)
+    testFlushAfterDistMatch(ICompressor& c)
     {
         for (auto out_size : {144, 129})
         {
-            z_params zp;
-            deflate_stream ds;
             std::array<std::uint8_t, 256> in{};
             // 125 will mostly fill the lit buffer, so emitting a distance code
             // results in a flush.
@@ -594,16 +588,16 @@ public:
             std::iota(in.begin(), in.begin() + n, 0);
             std::iota(in.begin() + n, in.end(), 0);
 
-            ds.reset(8, 15, 1, Strategy::normal);
+            c.init(8, 15, 1, static_cast<int>(Strategy::normal));
             std::string out;
             out.resize(out_size);
-            zp.next_in = in.data();
-            zp.avail_in = in.size();
-            zp.next_out = &out.front();
-            zp.avail_out = out.size();
+            c.next_in(in.data());
+            c.avail_in(in.size());
+            c.next_out(&out.front());
+            c.avail_out(out.size());
 
             error_code ec;
-            ds.write(zp, Flush::sync, ec);
+            ec = c.write(Flush::sync);
             BEAST_EXPECT(!ec);
         }
     }
