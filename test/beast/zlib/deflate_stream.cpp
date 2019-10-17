@@ -46,7 +46,7 @@ class deflate_stream_test : public beast::unit_test::suite
         virtual error_code write(Flush) = 0;
         virtual ~ICompressor() = default;
     };
-    struct ZlibCompressor : public ICompressor { //FIXME: change to class
+    class ZlibCompressor : public ICompressor { //FIXME: change to class
         z_stream zs;
 
     public:
