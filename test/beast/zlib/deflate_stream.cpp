@@ -517,7 +517,7 @@ public:
     {
         struct fixture
         {
-          ICompressor& c;
+            ICompressor& c;
             explicit fixture(ICompressor&c, std::size_t n, Strategy s) : c(c)
             {
                 c.init(8, 15, 1, static_cast<int>(s));
@@ -535,12 +535,17 @@ public:
 
         for (auto s : {Strategy::huffman, Strategy::rle, Strategy::normal})
         {
-            /*{
-                fixture f{c,264, s};
+            {
+                // upstream zlib compresses harder
+                fixture f{c,
+                          dynamic_cast<BeastCompressor*>(&c)
+                               ? 264ull
+                               : 270ull,
+                             s};
                 error_code ec = c.write(Flush::finish);
                 BEAST_EXPECT(ec == error::end_of_stream);
                 BEAST_EXPECT(c.avail_out() == 1);
-            }*/
+            }
 
             {
                 fixture f{c,263, s};
