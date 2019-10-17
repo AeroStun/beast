@@ -80,7 +80,9 @@ class inflate_stream_test : public beast::unit_test::suite
         virtual void next_out(void* ptr) noexcept override { zs.next_out = (Bytef*)ptr; }
 
         error_code write(Flush flush) override {
-            const auto res = inflate(&zs, static_cast<int>(flush));
+            constexpr static std::array<int, 7> zlib_flushes {0, Z_BLOCK, Z_PARTIAL_FLUSH, Z_SYNC_FLUSH, Z_FULL_FLUSH, Z_FINISH, Z_TREES};
+            const auto zlib_flush = zlib_flushes[static_cast<int>(flush)];
+            const auto res = inflate(&zs, zlib_flush);
             switch(res){
             case Z_OK:
               return {};
