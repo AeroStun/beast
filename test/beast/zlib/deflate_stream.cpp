@@ -82,7 +82,7 @@ class deflate_stream_test : public beast::unit_test::suite
            return deflateBound(&zs, static_cast<uLong>(src_size));
         }
         error_code write(Flush flush) override {
-            constexpr static std::array<int, 7> zlib_flushes {0, Z_BLOCK, Z_PARTIAL_FLUSH, Z_SYNC_FLUSH, Z_FULL_FLUSH, Z_FINISH, Z_TREES};
+            constexpr static int zlib_flushes[] = {0, Z_BLOCK, Z_PARTIAL_FLUSH, Z_SYNC_FLUSH, Z_FULL_FLUSH, Z_FINISH, Z_TREES};
             const auto zlib_flush = zlib_flushes[static_cast<int>(flush)];
             if(zs.next_in == nullptr && zs.avail_in != 0)
               BOOST_THROW_EXCEPTION(std::invalid_argument{"zlib compressor: invalid input"});
