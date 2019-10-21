@@ -59,7 +59,7 @@ class inflate_stream_test : public beast::unit_test::suite
         }
         void init() override {
           zs = {};
-          const auto res = inflateInit(&zs);
+          const auto res = inflateInit2(&zs, -15);
           switch(res){
           case Z_OK:
               break;
@@ -644,9 +644,9 @@ public:
         testInflateErrors(beast_decompressor);
         testInvalidSettings(zlib_decompressor);
         testInvalidSettings(beast_decompressor);
-        //testFixedHuffmanFlushTrees(zlib_decompressor);
+        testFixedHuffmanFlushTrees(zlib_decompressor);
         testFixedHuffmanFlushTrees(beast_decompressor);
-        //testUncompressedFlushTrees(zlib_decompressor);
+        testUncompressedFlushTrees(zlib_decompressor);
         testUncompressedFlushTrees(beast_decompressor);
     }
 };
