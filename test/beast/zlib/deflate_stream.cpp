@@ -41,6 +41,7 @@ class deflate_stream_test : public beast::unit_test::suite
         virtual void avail_out(std::size_t) noexcept = 0;
         virtual void* next_out() const noexcept = 0;
         virtual void next_out(void*) noexcept = 0;
+        virtual std::size_t total_out() const noexcept = 0;
 
         virtual std::size_t bound(std::size_t) = 0;
         virtual error_code write(Flush) = 0;
@@ -54,7 +55,7 @@ class deflate_stream_test : public beast::unit_test::suite
         void init() override {
             deflateEnd(&zs);
             zs = {};
-            const auto res = deflateInit(&zs, -1);
+            const auto res = deflateInit2(&zs, -1, Z_DEFLATED, -15, 8, Z_DEFAULT_STRATEGY);
             if(res != Z_OK)
                throw std::invalid_argument{"zlib compressor: failure"};
         }
@@ -66,7 +67,7 @@ class deflate_stream_test : public beast::unit_test::suite
         {
             deflateEnd(&zs);
             zs = {};
-            const auto res = deflateInit2(&zs, level, Z_DEFLATED, windowBits, memLevel, strategy);
+            const auto res = deflateInit2(&zs, level, Z_DEFLATED, -windowBits, memLevel, strategy);
             if(res != Z_OK)
                BOOST_THROW_EXCEPTION(std::invalid_argument{"zlib compressor: bad arg"});
         }
@@ -79,6 +80,7 @@ class deflate_stream_test : public beast::unit_test::suite
         virtual void avail_out(std::size_t n_out) noexcept override { zs.avail_out = n_out; }
         virtual void* next_out() const noexcept override { return zs.next_out; }
         virtual void next_out(void* ptr) noexcept override { zs.next_out = (Bytef*)ptr; }
+        virtual std::size_t total_out() const noexcept override { return zs.total_out; }
 
         std::size_t bound(std::size_t src_size) override {
            return deflateBound(&zs, static_cast<uLong>(src_size));
@@ -141,6 +143,7 @@ class deflate_stream_test : public beast::unit_test::suite
         virtual void avail_out(std::size_t n_out) noexcept override { zp.avail_out = n_out; }
         virtual void* next_out() const noexcept override { return zp.next_out; }
         virtual void next_out(void* ptr) noexcept override { zp.next_out = (Bytef*)ptr; }
+        virtual std::size_t total_out() const noexcept override { return zp.total_out; }
 
         std::size_t bound(std::size_t src_size) override {
             return ds.upper_bound(src_size);
@@ -280,6 +283,7 @@ public:
 
     using self = deflate_stream_test;
     typedef void(self::*pmf_t)(
+        ICompressor& c,
         int level, int windowBits, int memLevel,
         int strategy, std::string const&);
 
@@ -300,29 +304,26 @@ public:
 
     void
     doDeflate1_beast(
+        ICompressor& c,
         int level, int windowBits, int memLevel,
         int strategy, std::string const& check)
     {
         std::string out;
-        z_params zs;
-        deflate_stream ds;
-        ds.reset(
+        c.init(
             level,
             windowBits,
             memLevel,
-            toStrategy(strategy));
-        out.resize(ds.upper_bound(
-            static_cast<uLong>(check.size())));
-        zs.next_in = (Bytef*)check.data();
-        zs.avail_in = static_cast<uInt>(check.size());
-        zs.next_out = (Bytef*)out.data();
-        zs.avail_out = static_cast<uInt>(out.size());
+            strategy);
+        out.resize(c.bound(check.size()));
+        c.next_in(check.data());
+        c.avail_in(check.size());
+        c.next_out((void*)out.data());
+        c.avail_out(out.size());
         {
             bool progress = true;
             for(;;)
             {
-                error_code ec;
-                ds.write(zs, Flush::full, ec);
+                error_code ec = c.write(Flush::full);
                 if( ec == error::need_buffers ||
                     ec == error::end_of_stream) // per zlib FAQ
                     goto fin;
@@ -335,7 +336,7 @@ public:
         }
 
     fin:
-        out.resize(zs.total_out);
+        out.resize(c.total_out());
         BEAST_EXPECT(decompress(out) == check);
 
     err:
@@ -346,6 +347,7 @@ public:
 
     void
     doDeflate2_beast(
+        ICompressor& c,
         int level, int windowBits, int memLevel,
         int strategy, std::string const& check)
     {
@@ -353,50 +355,44 @@ public:
         {
             for(std::size_t j = 1;; ++j)
             {
-                z_params zs;
-                deflate_stream ds;
-                ds.reset(
+                c.init(
                     level,
                     windowBits,
                     memLevel,
-                    toStrategy(strategy));
+                    strategy);
                 std::string out;
-                out.resize(ds.upper_bound(
-                    static_cast<uLong>(check.size())));
+                out.resize(c.bound(check.size()));
                 if(j >= out.size())
                     break;
-                zs.next_in = (Bytef*)check.data();
-                zs.avail_in = static_cast<uInt>(i);
-                zs.next_out = (Bytef*)out.data();
-                zs.avail_out = static_cast<uInt>(j);
+                c.next_in((void*)check.data());
+                c.avail_in(i);
+                c.next_out((void*)out.data());
+                c.avail_out(j);
                 bool bi = false;
                 bool bo = false;
                 for(;;)
                 {
-                    error_code ec;
-                    ds.write(zs,
-                        bi ? Flush::full : Flush::none, ec);
+                    error_code ec = c.write(
+                        bi ? Flush::full : Flush::none);
                     if( ec == error::need_buffers ||
                         ec == error::end_of_stream) // per zlib FAQ
                         goto fin;
                     if(! BEAST_EXPECTS(! ec, ec.message()))
                         goto err;
-                    if(zs.avail_in == 0 && ! bi)
+                    if(c.avail_in() == 0 && ! bi)
                     {
                         bi = true;
-                        zs.avail_in =
-                            static_cast<uInt>(check.size() - i);
+                        c.avail_in(check.size() - i);
                     }
-                    if(zs.avail_out == 0 && ! bo)
+                    if(c.avail_out() == 0 && ! bo)
                     {
                         bo = true;
-                        zs.avail_out =
-                            static_cast<uInt>(out.size() - j);
+                        c.avail_out(out.size() - j);
                     }
                 }
 
             fin:
-                out.resize(zs.total_out);
+                out.resize(c.total_out());
                 BEAST_EXPECT(decompress(out) == check);
 
             err:
@@ -408,7 +404,7 @@ public:
     //--------------------------------------------------------------------------
 
     void
-    doMatrix(std::string const& check, pmf_t pmf)
+    doMatrix(ICompressor& c, std::string const& check, pmf_t pmf)
     {
         for(int level = 0; level <= 9; ++level)
         {
@@ -422,23 +418,23 @@ public:
                     for (int memLevel = 8; memLevel <= 9; ++memLevel)
                     {
                         (this->*pmf)(
-                                level, windowBits, memLevel, strategy, check);
+                            c, level, windowBits, memLevel, strategy, check);
                     }
                 }
             }
         }
 
         // Check default settings
-        (this->*pmf)(compression::default_size, 15, 8, 0, check);
+        (this->*pmf)(c, compression::default_size, 15, 8, 0, check);
     }
 
     void
-    testDeflate()
+    testDeflate(ICompressor& c)
     {
-        doMatrix("Hello, world!", &self::doDeflate1_beast);
-        doMatrix("Hello, world!", &self::doDeflate2_beast);
-        doMatrix(corpus1(56), &self::doDeflate2_beast);
-        doMatrix(corpus1(1024), &self::doDeflate1_beast);
+        doMatrix(c, "Hello, world!", &self::doDeflate1_beast);
+        doMatrix(c, "Hello, world!", &self::doDeflate2_beast);
+        doMatrix(c, corpus1(56), &self::doDeflate2_beast);
+        doMatrix(c, corpus1(1024), &self::doDeflate1_beast);
     }
 
     void testInvalidSettings(ICompressor& c)
@@ -539,11 +535,7 @@ public:
         {
             {
                 // upstream zlib compresses harder
-                fixture f{c,
-                          dynamic_cast<BeastCompressor*>(&c)
-                               ? 264ull
-                               : 270ull,
-                             s};
+                fixture f{c, 264, s};
                 error_code ec = c.write(Flush::finish);
                 BEAST_EXPECT(ec == error::end_of_stream);
                 BEAST_EXPECT(c.avail_out() == 1);
@@ -618,7 +610,8 @@ public:
             "sizeof(deflate_stream) == " <<
             sizeof(deflate_stream) << std::endl;
 
-        testDeflate();
+        testDeflate(zlib_compressor);
+        testDeflate(beast_compressor);
         testInvalidSettings(zlib_compressor);
         testInvalidSettings(beast_compressor);
         testWriteAfterFinish(zlib_compressor);
