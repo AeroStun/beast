@@ -46,12 +46,13 @@ class deflate_stream_test : public beast::unit_test::suite
         virtual error_code write(Flush) = 0;
         virtual ~ICompressor() = default;
     };
-    class ZlibCompressor : public ICompressor { //FIXME: change to class
-        z_stream zs;
+    class ZlibCompressor : public ICompressor {
+        z_stream zs{};
 
     public:
         ZlibCompressor() = default;
         void init() override {
+            deflateEnd(&zs);
             zs = {};
             const auto res = deflateInit(&zs, -1);
             if(res != Z_OK)
@@ -63,6 +64,7 @@ class deflate_stream_test : public beast::unit_test::suite
             int memLevel,
             int strategy) override
         {
+            deflateEnd(&zs);
             zs = {};
             const auto res = deflateInit2(&zs, level, Z_DEFLATED, windowBits, memLevel, strategy);
             if(res != Z_OK)

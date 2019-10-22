@@ -46,6 +46,7 @@ class inflate_stream_test : public beast::unit_test::suite
         ZlibDecompressor() = default;
         void init(int windowBits) override
         {
+            inflateEnd(&zs);
             zs = {};
             const auto res = inflateInit2(&zs, windowBits);
             switch(res){
@@ -58,16 +59,17 @@ class inflate_stream_test : public beast::unit_test::suite
             }
         }
         void init() override {
-          zs = {};
-          const auto res = inflateInit2(&zs, -15);
-          switch(res){
-          case Z_OK:
-              break;
-          case Z_MEM_ERROR:
-              BOOST_THROW_EXCEPTION(std::runtime_error{"zlib decompressor: no memory"});
-          case Z_STREAM_ERROR:
-             BOOST_THROW_EXCEPTION(std::domain_error{"zlib decompressor: bad arg"});
-          }
+            inflateEnd(&zs);
+            zs = {};
+            const auto res = inflateInit2(&zs, -15);
+            switch(res){
+            case Z_OK:
+                break;
+            case Z_MEM_ERROR:
+                BOOST_THROW_EXCEPTION(std::runtime_error{"zlib decompressor: no memory"});
+            case Z_STREAM_ERROR:
+               BOOST_THROW_EXCEPTION(std::domain_error{"zlib decompressor: bad arg"});
+            }
         }
 
         virtual std::size_t avail_in() const noexcept override  { return zs.avail_in; }
@@ -80,7 +82,7 @@ class inflate_stream_test : public beast::unit_test::suite
         virtual void next_out(void* ptr) noexcept override { zs.next_out = (Bytef*)ptr; }
 
         error_code write(Flush flush) override {
-            constexpr static std::array<int, 7> zlib_flushes {0, Z_BLOCK, Z_PARTIAL_FLUSH, Z_SYNC_FLUSH, Z_FULL_FLUSH, Z_FINISH, Z_TREES};
+            constexpr static int zlib_flushes[] = {0, Z_BLOCK, Z_PARTIAL_FLUSH, Z_SYNC_FLUSH, Z_FULL_FLUSH, Z_FINISH, Z_TREES};
             const auto zlib_flush = zlib_flushes[static_cast<int>(flush)];
             const auto res = inflate(&zs, zlib_flush);
             switch(res){
