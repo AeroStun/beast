@@ -433,6 +433,7 @@ public:
     {
         doMatrix(c, "Hello, world!", &self::doDeflate1_beast);
         doMatrix(c, "Hello, world!", &self::doDeflate2_beast);
+        log << "no-silence keepalive" << std::endl;
         doMatrix(c, corpus1(56), &self::doDeflate2_beast);
         doMatrix(c, corpus1(1024), &self::doDeflate1_beast);
     }
@@ -611,7 +612,6 @@ public:
 
         testDeflate(zlib_compressor);
         testDeflate(beast_compressor);
-        log << "no-silence keepalive" << std::endl;
         testInvalidSettings(zlib_compressor);
         testInvalidSettings(beast_compressor);
         testWriteAfterFinish(zlib_compressor);
