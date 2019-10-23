@@ -609,8 +609,9 @@ public:
             "sizeof(deflate_stream) == " <<
             sizeof(deflate_stream) << std::endl;
 
-        //testDeflate(zlib_compressor);
+        testDeflate(zlib_compressor);
         testDeflate(beast_compressor);
+        log << "no-silence keepalive" << std::endl;
         testInvalidSettings(zlib_compressor);
         testInvalidSettings(beast_compressor);
         testWriteAfterFinish(zlib_compressor);
