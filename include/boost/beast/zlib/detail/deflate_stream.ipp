@@ -559,7 +559,8 @@ doPrime(int bits, int value, error_code& ec)
 {
     maybe_init();
 
-    if((Byte *)(d_buf_) < pending_out_ + ((Buf_size + 7) >> 3))
+    if(bits < 0 || bits > 16 ||
+        (Byte *)(d_buf_) < pending_out_ + ((Buf_size + 7) >> 3))
     {
         ec = error::need_buffers;
         return;
