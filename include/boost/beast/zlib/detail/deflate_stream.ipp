@@ -1525,6 +1525,8 @@ fill_window(z_params& zs)
             match_start_ -= wsize;
             strstart_    -= wsize; // we now have strstart >= max_dist
             block_start_ -= (long) wsize;
+            if(insert_ > strstart_)
+              insert_ = strstart_;
 
             /* Slide the hash table (could be avoided with 32 bit values
                at the expense of memory usage). We slide even when level == 0
