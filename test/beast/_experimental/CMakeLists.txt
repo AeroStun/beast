@@ -14,6 +14,7 @@ add_executable (tests-beast-_experimental
     ${BOOST_BEAST_FILES}
     Jamfile
     error.cpp
+    cookies.cpp
     icy_stream.cpp
     stream.cpp
 )

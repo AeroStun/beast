@@ -9,6 +9,7 @@
 
 local SOURCES =
     error.cpp
+    cookies.cpp
     icy_stream.cpp
     stream.cpp
     ;
