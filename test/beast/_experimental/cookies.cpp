@@ -24,26 +24,39 @@ class cookies_test : public beast::unit_test::suite
 {
 public:
 
-    template<class Policy>
+    template<class List, class In>
     static
     std::vector<std::pair<std::string, std::string>>
-    to_vector(string_view in)
+    to_vector(const In& in)
     {
         std::vector<std::pair<std::string, std::string>> v;
-        detail::basic_parsed_list<Policy> list{in};
+        List list{in};
         for(auto const& s :
-                detail::basic_parsed_list<Policy>{in})
-            v.emplace_back(std::string{s.first.data(), s.first.size()},
-                           std::string{s.second.data(), s.second.size()});
+                List{in})
+            v.emplace_back(std::string{s.name().data(), s.name().size()},
+                           std::string{s.value().data(), s.value().size()});
         return v;
     }
 
-    template<class Policy>
+    template<class In, class Fn>
+    static
+    std::vector<std::pair<std::string, std::string>>
+    to_vector_fn(const In& in, Fn&& fn)
+    {
+      std::vector<std::pair<std::string, std::string>> v;
+      for(auto const& s :
+          fn(in))
+        v.emplace_back(std::string{s.name().data(), s.name().size()},
+                       std::string{s.value().data(), s.value().size()});
+      return v;
+    }
+
+    template<class List>
     void
     validate(string_view in,
              std::vector<std::pair<std::string, std::string>> const& v)
     {
-        BEAST_EXPECT(to_vector<Policy>(in) == v);
+        BEAST_EXPECT(to_vector<List>(in) == v);
     }
 
     template<class List>
@@ -53,7 +66,7 @@ public:
     {
         BEAST_EXPECT(validate_list(
             List{in}));
-        validate<typename List::policy_type>(in, v);
+        validate<List>(in, v);
     }
 
     template<class List>
@@ -84,10 +97,31 @@ public:
         bad<list>("foo=;bar=");
         bad<list>("foo=, bar=");
     }
+
+    void
+    testRequestCookieList()
+    {
+        http::fields f;
+
+        const auto check =
+            [&](std::vector<std::pair<std::string, std::string>> v)
+        {
+            BEAST_EXPECT(to_vector_fn(f,
+                           list_all_cookies<decltype(f)::allocator_type>) == v);
+        };
+
+        check({});
+        f.insert(field::referer, "foo.bar");
+        check({});
+        f.insert(field::cookie, "foo=bar");
+        check({{"foo", "bar"}});
+    }
+
     void
     run() override
     {
         testCookieList();
+        //testRequestCookieList();
     }
 };
 

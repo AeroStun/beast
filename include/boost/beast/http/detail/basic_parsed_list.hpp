@@ -41,6 +41,8 @@ public:
     class const_iterator;
 #endif
 
+    using iterator = const_iterator;
+
     class const_iterator
         : private boost::empty_value<Policy>
     {

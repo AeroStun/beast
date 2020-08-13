@@ -25,6 +25,8 @@ the program, with the macro BOOST_BEAST_SEPARATE_COMPILATION defined.
 # error Do not compile Beast library source with BOOST_BEAST_HEADER_ONLY defined
 #endif
 
+//#include <boost/beast/_experimental/http/detail/cookies.ipp>
+#include <boost/beast/_experimental/http/impl/date.ipp>
 #include <boost/beast/_experimental/test/impl/error.ipp>
 #include <boost/beast/_experimental/test/impl/fail_count.ipp>
 #include <boost/beast/_experimental/test/impl/stream.ipp>

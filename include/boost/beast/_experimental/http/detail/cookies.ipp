@@ -7,8 +7,8 @@
 // Official repository: https://github.com/boostorg/beast
 //
 
-#ifndef BOOST_BEAST_DETAIL_COOKIES_IPP
-#define BOOST_BEAST_DETAIL_COOKIES_IPP
+#ifndef BOOST_BEAST_HTTP_DETAIL_COOKIES_IPP
+#define BOOST_BEAST_HTTP_DETAIL_COOKIES_IPP
 
 #include <boost/beast/core/string.hpp>
 #include <boost/beast/_experimental/http/detail/cookies.hpp>
@@ -48,8 +48,7 @@ is_cookie_octet(char c) noexcept
     return tab[static_cast<unsigned char>(c)];
 }
 
-bool
-cookie_list_policy::operator()(value_type& v,
+bool request_cookie_list_policy::operator()(request_cookie_view& v,
                                   char const*& it, string_view s) const
 {
     const auto s_end = s.data() + s.size();
@@ -64,7 +63,7 @@ cookie_list_policy::operator()(value_type& v,
     const auto need_semispace = it != s.data();
     if(need_semispace)
     {
-          constexpr size_t min_len = sizeof("; a=b");
+          constexpr size_t min_len = sizeof("; a=b") - 1;
           if(static_cast<size_t>(s_end - it) < min_len
               || *it++ != ';'
               || *it++ != ' ')
@@ -86,12 +85,12 @@ cookie_list_policy::operator()(value_type& v,
 
         return false;
     }
-    v.first = {name_begin,
+    v.name_ = {name_begin,
                static_cast<std::size_t>(it - name_begin)};
 
     if(++it == s_end)
     {
-        v.second = {nullptr, 0};
+        v.value_ = {nullptr, 0};
         return true;
     }
 
@@ -115,7 +114,7 @@ cookie_list_policy::operator()(value_type& v,
         return false;
     }
 
-    v.second = {value_begin,
+    v.value_ = {value_begin,
                static_cast<std::size_t>(it - value_begin)};
 
     if(quoted)

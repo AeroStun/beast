@@ -8,8 +8,9 @@
 #
 
 local SOURCES =
+    date.cpp
     error.cpp
-    cookies.cpp
+#    cookies.cpp
     icy_stream.cpp
     stream.cpp
     ;
