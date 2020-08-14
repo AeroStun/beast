@@ -12,7 +12,8 @@
 
 #include <boost/beast/core/detail/config.hpp>
 #include <boost/beast/core/string.hpp>
-#include <boost/date_time/local_time/local_date_time.hpp>
+#include <boost/optional/optional.hpp>
+#include <chrono>
 #include <string>
 
 namespace boost {
@@ -22,9 +23,116 @@ namespace http {
 /* Note: HTTP time is defined by RFC2616 at section 3.3.1
 */
 
+struct year_month_day {
+    uint_least16_t year; // [1970;9999]
+    uint_least8_t month; // [1;12]
+    uint_least8_t day; // [1;31]
+};
+
+struct time_of_day {
+    std::chrono::hours hour; // [0;23]
+    std::chrono::minutes minute; // [0;59]
+    std::chrono::seconds second; // [0;59]
+};
+
 /** The datatype which represents an HTTP date-time
 */
-using date_time = boost::local_time::local_date_time;
+struct date_time {
+    year_month_day date;
+    time_of_day time;
+};
+
+BOOST_BEAST_DECL
+bool
+operator==(year_month_day, year_month_day) noexcept;
+
+BOOST_BEAST_DECL
+bool
+operator!=(year_month_day, year_month_day) noexcept;
+
+BOOST_BEAST_DECL
+bool
+operator<(year_month_day, year_month_day) noexcept;
+
+BOOST_BEAST_DECL
+bool
+operator>(year_month_day, year_month_day) noexcept;
+
+BOOST_BEAST_DECL
+bool
+operator<=(year_month_day, year_month_day) noexcept;
+
+BOOST_BEAST_DECL
+bool
+operator>=(year_month_day, year_month_day) noexcept;
+
+
+BOOST_BEAST_DECL
+bool
+operator==(time_of_day const&, time_of_day const&) noexcept;
+
+BOOST_BEAST_DECL
+bool
+operator!=(time_of_day const&, time_of_day const&) noexcept;
+
+BOOST_BEAST_DECL
+bool
+operator<(time_of_day const&, time_of_day const&) noexcept;
+
+BOOST_BEAST_DECL
+bool
+operator>(time_of_day const&, time_of_day const&) noexcept;
+
+BOOST_BEAST_DECL
+bool
+operator<=(time_of_day const&, time_of_day const&) noexcept;
+
+BOOST_BEAST_DECL
+bool
+operator>=(time_of_day const&, time_of_day const&) noexcept;
+
+
+BOOST_BEAST_DECL
+bool
+operator==(date_time const&, date_time const&) noexcept;
+
+BOOST_BEAST_DECL
+bool
+operator!=(date_time const&, date_time const&) noexcept;
+
+BOOST_BEAST_DECL
+bool
+operator<(date_time const&, date_time const&) noexcept;
+
+BOOST_BEAST_DECL
+bool
+operator>(date_time const&, date_time const&) noexcept;
+
+BOOST_BEAST_DECL
+bool
+operator<=(date_time const&, date_time const&) noexcept;
+
+BOOST_BEAST_DECL
+bool
+operator>=(date_time const&, date_time const&) noexcept;
+
+/** Turns the provided date_time into the number of seconds
+    since 1970-01-01 00:00:00 UTC
+
+    This function assumes that the date_time object holds
+    a valid HTTP date after POSIX epoch and a valid time of day
+*/
+BOOST_BEAST_DECL
+unsigned long long
+to_posix(date_time const&) noexcept;
+
+/** Turns the provided number of seconds
+    since 1970-01-01 00:00:00 UTC
+    into a date_time
+*/
+BOOST_BEAST_DECL
+date_time
+from_posix(unsigned long long) noexcept;
 
 /** Turns an HTTP date string into a date_time
 
@@ -50,10 +158,10 @@ using date_time = boost::local_time::local_date_time;
                  | "Sep" | "Oct" | "Nov" | "Dec"
 
     @return The date_time with date information,
-    or set to not_a_date_time on error
+    or boost::none on error
 */
 BOOST_BEAST_DECL
-date_time
+boost::optional<date_time>
 parse_datetime(string_view http_date_str) noexcept;
 
 /** Turns a date_time object into an RFC1123 date string

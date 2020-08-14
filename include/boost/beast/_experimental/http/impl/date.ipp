@@ -15,9 +15,6 @@
 #include <boost/beast/core/error.hpp>
 #include <boost/beast/core/string.hpp>
 #include <boost/beast/http/detail/rfc7230.hpp>
-#include <boost/date_time/local_time/local_date_time.hpp>
-#include <boost/date_time/posix_time/time_parsers.hpp>
-#include <boost/date_time/gregorian/gregorian_types.hpp>
 #include <algorithm>
 #include <array>
 #include <iterator>
@@ -28,6 +25,11 @@ namespace beast {
 namespace http {
 
 namespace impl {
+
+constexpr static int epoch_year = 1970;
+constexpr int days_in_month[][12]{
+  {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31},
+  {31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31}};
 
 template <std::size_t N>
 constexpr string_view lit_to_view(const char (&lit)[N]) {
@@ -80,17 +82,6 @@ weekday_from_short_str(string_view s) noexcept
          std::distance(weekdays_strings.begin(), it) : -1;
 }
 
-/*
-BOOST_BEAST_DECL
-short
-month_from_str(string_view s) noexcept
-{
-    const auto it = std::find(months_strings.begin(), months_strings.end(), s);
-    return it != months_strings.end() ?
-        std::distance(months_strings.begin(), it) + 1 : -1;
-}
-*/
-
 BOOST_BEAST_DECL
 short
 month_from_short_str(string_view s) noexcept
@@ -119,67 +110,162 @@ svtous_unchecked(string_view s) noexcept
     return res;
 }
 
+
+/* Checks if a year is leap
+*/
+constexpr
+bool
+is_leap(int y) noexcept
+{
+    return y % 4 == 0 && (y % 100 != 0 || y % 400 == 0);
+}
+
+/* Date algorithms derived from code by Howard Hinnant
+*/
+
+BOOST_BEAST_DECL
+int
+days_from_ymd(year_month_day ymd) noexcept
+{
+    using Int = int_fast32_t;
+    using Uint = uint_fast32_t;
+    unsigned y = ymd.year;
+    const auto& m = ymd.month;
+    const auto& d = ymd.day;
+    y -= m <= 2;
+    const Uint era = y / 400;
+    const Uint yoe = static_cast<Uint>(y - era * 400);      // [0, 399]
+    const Uint doy = (153*(m + (m > 2 ? -3 : 9)) + 2)/5 + d-1;  // [0, 365]
+    const Uint doe = yoe * 365 + yoe/4 - yoe/100 + doy;         // [0, 146096]
+    return era * 146097 + static_cast<Int>(doe) - 719468;
+}
+
+BOOST_BEAST_DECL
+year_month_day
+ymd_from_days(std::uint_fast32_t z) noexcept
+{
+    using Int = std::int_fast32_t;
+    using Uint = std::uint_fast32_t;
+    z += 719468;
+    const Uint era = z / 146097;
+    const Uint doe = static_cast<Uint>(z - era * 146097); // [0, 146096]
+    const Uint yoe =
+        (doe - doe/1460 + doe/36524 - doe/146096) / 365;  // [0, 399]
+    const Int y = static_cast<Int>(yoe) + era * 400;
+    const Uint doy = doe - (365*yoe + yoe/4 - yoe/100);   // [0, 365]
+    const Uint mp = (5*doy + 2)/153;                      // [0, 11]
+    const std::uint_least8_t d = doy - (153*mp+2)/5 + 1;  // [1, 31]
+    const std::uint_least8_t m = mp + (mp < 10 ? 3 : -9); // [1, 12]
+    return {static_cast<std::uint_least16_t>(y + (m <= 2)), m, d};
+}
+
+BOOST_BEAST_DECL
+uint_least8_t
+weekday_from_days(int days) noexcept {
+    return static_cast<uint_least8_t>(
+        static_cast<unsigned>(days >= -4 ? (days+4) % 7 : (days+5) % 7 + 6));
+}
+
+BOOST_BEAST_DECL
+uint_least8_t
+weekday_from_date(year_month_day ymd) noexcept {
+    return weekday_from_days(days_from_ymd(ymd));
+}
+
+BOOST_BEAST_DECL
+bool
+check_day_of_month(year_month_day const& ymd) noexcept
+{
+    if(ymd.day < 1)
+        return false;
+    if(ymd.day > days_in_month[+is_leap(ymd.year)][ymd.month])
+        return false;
+
+    return true;
+}
+
+BOOST_BEAST_DECL
+bool
+check_datetime(date_time const& dt) noexcept
+{
+    if(dt.date.year < epoch_year)
+        return false;
+    if(dt.date.year > 9999)
+        return false;
+    if(dt.date.month < 1)
+        return false;
+    if(dt.date.month > 12)
+        return false;
+    if(!check_day_of_month(dt.date))
+        return false;
+
+    if(dt.time.hour.count() > 23)
+        return false;
+    if(dt.time.minute.count() > 59)
+        return false;
+    if(dt.time.second.count() > 59)
+        return false;
+
+    return true;
+}
+
 /*  Formats: dd$Mmm$ (where $ is sep)
     Precondition: s.length() >= 7
 */
 BOOST_BEAST_DECL
-boost::gregorian::date
+boost::optional<year_month_day>
 parse_daymonth(string_view s, char sep) noexcept
 {
-    using namespace boost::gregorian;
-    using boost::date_time::special_values::not_a_date_time;
-    const auto error = []{ return date{not_a_date_time}; };
-
     if (!(detail::is_digit(s[0]) && detail::is_digit(s[1])))
-        return error();
-    const greg_day day = svtous_unchecked({&s[0], 2});
+        return boost::none;
+    const auto day = svtous_unchecked({&s[0], 2});
 
     if (s[2] != sep)
-        return error();
+        return boost::none;
 
-    const auto month_value = month_from_short_str(s.substr(3, 3));
-    if (month_value == -1)
-        return error();
-    const greg_month month(month_value);
+    const auto month = month_from_short_str(s.substr(3, 3));
+    if (month == -1)
+        return boost::none;
 
     if (s[6] != sep)
-        return error();
+        return boost::none;
 
-    return {1970, month, day};
+    return {{epoch_year,
+             static_cast<uint_least8_t>(month),
+             static_cast<uint_least8_t>(day)}};
 }
 
 /*  Format: hh:mm:ss
     Precondition: s.length() >= 8
 */
 BOOST_BEAST_DECL
-boost::posix_time::time_duration
+boost::optional<time_of_day>
 parse_time(string_view s) noexcept
 {
-    const auto error = []{ return boost::date_time::not_a_date_time; };
     if(!((s[0] == '0' || s[0] == '1') && detail::is_digit(s[1])) &&
        !(s[0] == '2' && (s[1] >= '0' && s[1] <= '3')))
-        return error();
-    const auto hour = svtous_unchecked(s.substr(0, 2));
+        return boost::none;
+    const std::chrono::hours hour{svtous_unchecked(s.substr(0, 2))};
 
     if(s[2] != ':')
-        return error();
+        return boost::none;
 
     if(s[3] < '0' || s[3] > '5')
-        return error();
+        return boost::none;
     if(!detail::is_digit(s[4]))
-        return error();
-    const auto minute = svtous_unchecked(s.substr(3, 2));
+        return boost::none;
+    const std::chrono::minutes minute{svtous_unchecked(s.substr(3, 2))};
 
     if(s[5] != ':')
-        return error();
+        return boost::none;
 
     if(s[6] < '0' || s[6] > '5')
-        return error();
+        return boost::none;
     if(!detail::is_digit(s[7]))
-        return error();
-    const auto second = svtous_unchecked(s.substr(6, 2));
+        return boost::none;
+    const std::chrono::seconds second{svtous_unchecked(s.substr(6, 2))};
 
-    return {hour, minute, second};
+    return {{hour, minute, second}};
 }
 
 /*  Format: "Www, dd Mmm yyyy hh:mm:ss GMT" (fixed length)
@@ -187,52 +273,51 @@ parse_time(string_view s) noexcept
     - s[3] is a space character (`' '`)
 */
 BOOST_BEAST_DECL
-date_time
+boost::optional<date_time>
 parse_rfc1123(string_view s) noexcept
 {
-    using namespace boost::gregorian;
-    using boost::date_time::special_values::not_a_date_time;
-    const auto error = []{ return date_time{not_a_date_time, nullptr}; };
-
     constexpr std::size_t fmt_len = sizeof("Www, dd Mmm yyyy hh:mm:ss GMT") - 1;
     if(s.length() < fmt_len)
-        return error();
+        return boost::none;
 
-    const auto wkday_value = weekday_from_short_str(s.substr(0, 3));
-    if (wkday_value == -1)
-        return error();
-    const greg_weekday wkday(wkday_value);
+    const auto weekday = weekday_from_short_str(s.substr(0, 3));
+    if (weekday == -1)
+        return boost::none;
 
     // No need to validate s[3] as its value is a precondition
 
     if (s[4] != ' ')
-        return error();
+        return boost::none;
 
-    const auto day_month = parse_daymonth(s.substr(5, 7), ' ');
-    if (day_month.is_not_a_date())
-        return error();
+    const auto day_month_opt = parse_daymonth(s.substr(5, 7), ' ');
+    if (!day_month_opt)
+        return boost::none;
+    const auto& day_month = *day_month_opt;
+
 
     if (!std::all_of(&s[12], &s[16], detail::is_digit))
-        return error();
+        return boost::none;
     const auto year = svtous_unchecked(s.substr(12, 4));
-    if(year < 1400)
-        return error();
-    const date full_date = {year, day_month.month(), day_month.day()};
-     if(full_date.day_of_week() != wkday)
-        return error();
+    if(year < 1970)
+        return boost::none;
+    const year_month_day full_date = {year, day_month.month, day_month.day};
+    if(!check_day_of_month(full_date))
+        return boost::none;
+    if(weekday_from_date(full_date) != weekday)
+        return boost::none;
 
     if (s[16] != ' ')
-        return error();
+        return boost::none;
 
-    const auto time_of_day = parse_time(s.substr(17, 8));
-    if(time_of_day.is_not_a_date_time())
-        return error();
-
+    const auto time_opt = parse_time(s.substr(17, 8));
+    if(!time_opt)
+        return boost::none;
+    const auto& time = *time_opt;
 
     if(s.substr(25, 4) != " GMT")
-        return error();
+        return boost::none;
 
-    return {full_date, time_of_day, nullptr, false};
+    return {{full_date, time}};
 }
 
 /*  Format: "Wwww, dd-Mmm-yy hh:mm:ss GMT"
@@ -241,59 +326,58 @@ parse_rfc1123(string_view s) noexcept
      - s[3] is a ','
 */
 BOOST_BEAST_DECL
-date_time
+boost::optional<date_time>
 parse_rfc850(string_view s) noexcept
 {
-    using namespace boost::gregorian;
-    using boost::date_time::special_values::not_a_date_time;
-    const auto error = []{ return date_time{not_a_date_time, nullptr}; };
-
     constexpr auto longest_weekday_len = sizeof("Wednesday") - 1;
 
     const char* const it =
         std::find(s.data(), s.data() + longest_weekday_len, ',');
     if(it == s.data() + longest_weekday_len)
-        return error();
+        return boost::none;
 
     const string_view weekday_sv{s.substr(0, it - s.data())};
-    const auto weekday_value = weekday_from_str(weekday_sv);
-    if(weekday_value == -1)
-        return error();
-    const greg_weekday wkday(weekday_value);
+    const auto weekday = weekday_from_str(weekday_sv);
+    if(weekday == -1)
+        return boost::none;
 
     const auto full_datetime_length =
         weekday_sv.length() + (sizeof(", dd-Mmm-yy hh:mm:ss GMT") - 1);
     if(s.length() < full_datetime_length)
-        return error();
+        return boost::none;
 
     s = s.substr(it - s.data() + 1);
 
     if(s[0] != ' ')
-        return error();
+        return boost::none;
 
-    const auto day_month = parse_daymonth(s.substr(1, 11), '-');
-    if(day_month.is_not_a_date())
-        return error();
+    const auto day_month_opt = parse_daymonth(s.substr(1, 11), '-');
+    if(!day_month_opt)
+        return boost::none;
+    const auto& day_month = *day_month_opt;
 
     if(!std::all_of(&s[8], &s[10], detail::is_digit))
-        return error();
+        return boost::none;
     auto year_value = svtous_unchecked(s.substr(8, 2));
     year_value += (year_value < 70 ? 2000 : 1900);
-    const date full_date = {year_value, day_month.month(), day_month.day()};
-    if(full_date.day_of_week() != wkday)
-        return error();
+    const year_month_day full_date = {year_value, day_month.month, day_month.day};
+    if(!check_day_of_month(full_date))
+        return boost::none;
+    if(weekday_from_date(full_date) != weekday)
+        return boost::none;
 
     if(s[10] != ' ')
-        return error();
+        return boost::none;
 
-    const auto time = parse_time(s.substr(11, 8));
-    if(time.is_not_a_date_time())
-        return error();
+    const auto time_opt = parse_time(s.substr(11, 8));
+    if(!time_opt)
+        return boost::none;
+    const auto& time = *time_opt;
 
     if(s.substr(19, 4) != " GMT")
-        return error();
+        return boost::none;
 
-    return {full_date, time, nullptr, false};
+    return {{full_date, time}};
 }
 
 /*  Format: "Www Mmm  d hh:mm:ss yyyy"
@@ -301,59 +385,58 @@ parse_rfc850(string_view s) noexcept
     - s.length >= 24
 */
 BOOST_BEAST_DECL
-date_time
+boost::optional<date_time>
 parse_asctime(string_view s) noexcept
 {
-    using namespace boost::gregorian;
-    using boost::date_time::special_values::not_a_date_time;
-    const auto error = []{ return date_time{not_a_date_time, nullptr}; };
-
-    const auto wkday_value = weekday_from_short_str(s.substr(0, 3));
-    if (wkday_value == -1)
-        return error();
-    const greg_weekday wkday(wkday_value);
+    const auto weekday = weekday_from_short_str(s.substr(0, 3));
+    if(weekday == -1)
+        return boost::none;
 
     // No need to validate s[3] as its value is a precondition
 
-    const auto month_value = month_from_short_str(s.substr(4, 3));
-    if(month_value == -1)
-        return error();
-    const greg_month month(month_value);
+    const auto month = month_from_short_str(s.substr(4, 3));
+    if(month == -1)
+        return boost::none;
 
     if(s[7] != ' ')
-        return error();
+        return boost::none;
 
     if(!detail::is_digit(s[9]))
-        return error();
+        return boost::none;
     int day = s[9] - '0';
     if(s[8] >= '1' && s[8] <= '3')
         day += (s[8] - '0') * 10;
     else if(s[8] != ' ')
-        return error();
+        return boost::none;
     if(day > 31)
-        return error();
+        return boost::none;
 
 
     if(s[10] != ' ')
-        return error();
+        return boost::none;
 
-    const auto time_of_day = parse_time(s.substr(11, 8));
-    if(time_of_day.is_not_a_date_time())
-        return error();
+    const auto time_opt = parse_time(s.substr(11, 8));
+    if(!time_opt)
+        return boost::none;
+    const auto& time = *time_opt;
 
     if(s[19] != ' ')
-        return error();
+        return boost::none;
 
     if(!std::all_of(&s[20], &s[24], detail::is_digit))
-        return error();
+        return boost::none;
     const auto year = svtous_unchecked(s.substr(20, 4));
-    if(year < 1400)
-        return error();
-    const date full_date = {year, month, day};
-    if(full_date.day_of_week() != wkday)
-        return error();
+    if(year < epoch_year)
+        return boost::none;
+    const year_month_day full_date = {year,
+                                      static_cast<uint_least8_t>(month),
+                                      static_cast<uint_least8_t>(day)};
+    if(!check_day_of_month(full_date))
+        return boost::none;
+    if(weekday_from_date(full_date) != weekday)
+        return boost::none;
 
-    return {full_date, time_of_day, nullptr, false};
+    return {{full_date, time}};
 }
 
 /*  Format: "Www, dd Mmm yyyy hh:mm:ss GMT" (fixed length)
@@ -384,9 +467,8 @@ stringify_datetime_at_unchecked(date_time const& dt, char* storage) noexcept
         }
     };
 
-    const auto date = dt.date();
-    const auto ymd = date.year_month_day();
-    copy_at(storage, impl::weekdays_strings[date.day_of_week()]);
+    const auto& ymd = dt.date;
+    copy_at(storage, impl::weekdays_strings[(days_from_ymd(ymd) + 4) % 7]);
     copy_at(storage + 3, ", ");
     put_decimals(storage + 5, ymd.day, 2);
     storage[7] = ' ';
@@ -394,51 +476,24 @@ stringify_datetime_at_unchecked(date_time const& dt, char* storage) noexcept
     storage[11] = ' ';
     put_decimals(storage + 12, ymd.year, 4);
     storage[16] = ' ';
-    const auto time = dt.time_of_day();
-    put_decimals(storage + 17, time.hours(), 2);
+    const auto& time = dt.time;
+    put_decimals(storage + 17, time.hour.count(), 2);
     storage[19] = ':';
-    put_decimals(storage + 20, time.minutes(), 2);
+    put_decimals(storage + 20, time.minute.count(), 2);
     storage[22] = ':';
-    put_decimals(storage + 23, time.seconds(), 2);
+    put_decimals(storage + 23, time.second.count(), 2);
     copy_at(storage + 25, " GMT");
 }
 
 }
 
-/** Turns an HTTP date string into a date_time
 
-    RFC2616 defines HTTP dates with the following ABNF:
-    HTTP-date    = rfc1123-date | rfc850-date | asctime-date
-    rfc1123-date = wkday "," SP date1 SP time SP "GMT"
-    rfc850-date  = weekday "," SP date2 SP time SP "GMT"
-    asctime-date = wkday SP date3 SP time SP 4DIGIT
-    date1        = 2DIGIT SP month SP 4DIGIT
-                   ; day month year (e.g., 02 Jun 1982)
-    date2        = 2DIGIT "-" month "-" 2DIGIT
-                   ; day-month-year (e.g., 02-Jun-82)
-    date3        = month SP ( 2DIGIT | ( SP 1DIGIT ))
-                   ; month day (e.g., Jun  2)
-    time         = 2DIGIT ":" 2DIGIT ":" 2DIGIT
-                   ; 00:00:00 - 23:59:59
-    wkday        = "Mon" | "Tue" | "Wed"
-                 | "Thu" | "Fri" | "Sat" | "Sun"
-    weekday      = "Monday" | "Tuesday" | "Wednesday"
-                 | "Thursday" | "Friday" | "Saturday" | "Sunday"
-    month        = "Jan" | "Feb" | "Mar" | "Apr"
-                 | "May" | "Jun" | "Jul" | "Aug"
-                 | "Sep" | "Oct" | "Nov" | "Dec"
-
-    @return The date_time with date information,
-    or set to not_a_date_time on error
-*/
-date_time
+boost::optional<date_time>
 parse_datetime(string_view http_date_str) noexcept
 {
-    using boost::date_time::special_values::not_a_date_time;
-
     constexpr std::size_t shortest_date_length = sizeof("Sun Nov  6 08:49:37 1994") - 1;
     if(http_date_str.length() < shortest_date_length)
-        return date_time{not_a_date_time, nullptr};;
+        return boost::none;
 
     if(http_date_str[3] == ',')
         return impl::parse_rfc1123(http_date_str);
@@ -451,7 +506,7 @@ bool
 stringify_datetime_at(date_time const& dt, char* storage) noexcept
 {
     BOOST_ASSERT(storage != nullptr);
-    if(dt.is_special())
+    if(!impl::check_datetime(dt))
         return false;
 
     impl::stringify_datetime_at_unchecked(dt, storage);
@@ -462,12 +517,159 @@ std::string
 stringify_datetime(date_time const& dt)
 {
     std::string s{};
-    if(dt.is_special())
+    if(!impl::check_datetime(dt))
         return s;
 
     s.resize(29);
     impl::stringify_datetime_at_unchecked(dt, &s[0]);
     return s;
+}
+
+bool
+operator==(year_month_day lhs, year_month_day rhs) noexcept
+{
+    return (lhs.year == rhs.year)
+        && (lhs.month == rhs.month)
+        && (lhs.day == rhs.day);
+}
+
+bool
+operator!=(year_month_day lhs, year_month_day rhs) noexcept
+{
+    return !(lhs == rhs);
+}
+
+bool
+operator<(year_month_day lhs, year_month_day rhs) noexcept
+{
+    return (lhs.year < rhs.year)
+        && (lhs.month < rhs.month)
+        && (lhs.day < rhs.day);
+}
+
+bool
+operator>(year_month_day lhs, year_month_day rhs) noexcept
+{
+    return (lhs.year > rhs.year)
+        && (lhs.month > rhs.month)
+        && (lhs.day > rhs.day);
+}
+
+bool
+operator<=(year_month_day lhs, year_month_day rhs) noexcept
+{
+    return !(lhs > rhs);
+}
+
+bool
+operator>=(year_month_day lhs, year_month_day rhs) noexcept
+{
+    return !(lhs < rhs);
+}
+
+
+bool
+operator==(time_of_day const& lhs, time_of_day const& rhs) noexcept
+{
+    return (lhs.hour == rhs.hour)
+        && (lhs.minute == rhs.minute)
+        && (lhs.second == rhs.second);
+}
+
+bool
+operator!=(time_of_day const& lhs, time_of_day const& rhs) noexcept
+{
+    return !(lhs == rhs);
+}
+
+bool
+operator<(time_of_day const& lhs, time_of_day const& rhs) noexcept
+{
+    return (lhs.hour < rhs.hour)
+        && (lhs.minute < rhs.minute)
+        && (lhs.second < rhs.second);
+}
+
+bool
+operator>(time_of_day const& lhs, time_of_day const& rhs) noexcept
+{
+    return (lhs.hour > rhs.hour)
+        && (lhs.minute > rhs.minute)
+        && (lhs.second > rhs.second);
+}
+
+bool
+operator<=(time_of_day const& lhs, time_of_day const& rhs) noexcept
+{
+    return !(lhs > rhs);
+}
+
+bool
+operator>=(time_of_day const& lhs, time_of_day const& rhs) noexcept
+{
+    return !(lhs < rhs);
+}
+
+
+bool
+operator==(date_time const& lhs, date_time const& rhs) noexcept
+{
+    return (lhs.date == rhs.date) && (lhs.time == rhs.time);
+}
+
+bool
+operator!=(date_time const& lhs, date_time const& rhs) noexcept
+{
+    return !(lhs == rhs);
+}
+
+bool
+operator<(date_time const& lhs, date_time const& rhs) noexcept
+{
+    return (lhs.date < rhs.date) && (lhs.time < rhs.time);
+}
+
+bool
+operator>(date_time const& lhs, date_time const& rhs) noexcept
+{
+    return (lhs.date > rhs.date) && (lhs.time > rhs.time);
+}
+
+bool
+operator<=(date_time const& lhs, date_time const& rhs) noexcept
+{
+    return !(lhs > rhs);
+}
+
+bool
+operator>=(date_time const& lhs, date_time const& rhs) noexcept
+{
+    return !(lhs < rhs);
+}
+
+
+unsigned long long
+to_posix(date_time const& dt) noexcept
+{
+    unsigned long long result{};
+    result += impl::days_from_ymd(dt.date) * 24 * 3600;
+    result += dt.time.hour.count() * 3600;
+    result += dt.time.minute.count() * 60;
+    result += dt.time.second.count();
+    return result;
+}
+
+date_time
+from_posix(unsigned long long t) noexcept
+{
+    using std::chrono::duration_cast;
+    const auto ymd = impl::ymd_from_days(t / (3600 * 24));
+    std::chrono::seconds rem{t % (3600 * 24)};
+    const auto hour = duration_cast<std::chrono::hours>(rem);
+    rem -= hour;
+    const auto minute = duration_cast<std::chrono::minutes>(rem);
+    rem -= minute;
+    return {ymd, {hour, minute, rem}};
 }
 
 } // namespace http
